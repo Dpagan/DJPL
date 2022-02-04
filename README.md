@@ -1,2 +1,2 @@
-# djpl
-Projects and assignments I have worked on.
+# Dwight Pagan
+Projects and assignments I've worked on or I am currently working on.
