@@ -1,0 +1,188 @@
+---
+title: "Principal Component Analysis (PCA)"
+
+Author: "Dwight Pagan"
+---
+
+In this project, I use the crime dataset (`uscrime.txt`). My goal is to apply Principal Component Analysis (PCA) to the predictor variables and then build a regression model using the first few principal components. I then express this new model in terms of the original variables (i.e., unscale the PCA coefficients) and compare its quality to the direct regression model Ijad previously developed. This document explains each step in detail, includes visualizations, and is written in the first person to reflect my approach.
+
+## Data Preparation
+
+```{r load-data, echo=TRUE, message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+
+# Read the crime dataset (adjust the file path as needed)
+crime_data <- read.table("uscrime.txt", header = TRUE)
+head(crime_data)
+```
+
+
+## Examine the structure and Separate predictors and reponse variables
+```{r}
+str(crime_data)
+
+# Predictors and response variable
+X <- crime_data %>% select(-Crime)
+y <- crime_data$Crime
+```
+
+## Scaling Predictors
+```{r}
+# Calculating scaling parameters (mean and sd for each predictor)
+scaling_params <- X %>%
+  summarise(across(everything(), list(mean = mean, sd = sd), .names = "{.col}_{.fn}"))
+
+# Define a function to scale any new dataset using these parameters
+scale_new_data <- function(df, params) {
+  df_scaled <- df
+  for (col in names(df)) {
+    df_scaled[[col]] <- (df[[col]] - params[[paste0(col, "_mean")]]) / params[[paste0(col, "_sd")]]
+  }
+  return(df_scaled)
+}
+```
+
+## Create a scaled dataset for the predictors and combine with the response
+```{r}
+X_scaled <- scale_new_data(X, scaling_params)
+crime_data_scaled <- cbind(X_scaled, Crime = y)
+
+# Check the scaled data structure
+str(crime_data_scaled)
+```
+
+# PCA Analysis
+
+```{r}
+# Performing PCA on the original predictors with scaling
+pca_result <- prcomp(X, scale. = TRUE)
+
+# Summarizeing the PCA results to inspect variance explained
+summary(pca_result)
+```
+**Observations**:
+The summary indicates that PC1 explains approximately 40% of the variance, and the first 5 components cumulatively explain about 86% of the total variance.
+
+**Note**:I apply PCA on the original predictors (the prcomp function automatically centers and scales, but I already scaled the data; here I use the original data with scale. = TRUE for clarity). Then, I examine the proportion of variance explained to decide how many components to retain.
+
+
+## Plot: Scree plot to visualize the variance explained by each principal component
+```{r}
+plot(pca_result, type = "l", main = "Scree Plot: Variance Explained by PCs")
+```
+
+**Observations**:
+The scree plot displays a clear elbow after the 5th component, justifying the retention of the first 5 principal components.
+
+**Note**: Based on the scree plot and the summary, I choose to retain the first 5 principal components.
+
+
+## Scores
+```{r}
+# Extract scores for the first 5 principal components
+pc_scores <- pca_result$x[, 1:5]
+print(pc_scores)
+```
+**Observations**:
+The first 5 PC scores are extracted successfully, and these will serve as the new predictors in my regression model.
+
+
+## PCA in terms of orignal variables
+```{r}
+# Extract loadings (rotation) for the first 5 PCs
+loadings <- pca_result$rotation[, 1:5]
+```
+
+## Linear model predicting y from pc_scores
+```{r}
+model_pca <- lm(y ~ pc_scores)
+summary(model_pca)
+```
+
+**Observations**:
+The PCA-based regression model shows significant coefficients for some PCs (e.g., PC1, PC2, PC4, and PC5) with an overall R-squared of approximately 0.6452, indicating that these components capture a substantial portion of the variability in Crime.
+
+
+## Regression model coefficients
+```{r}
+# Get regression coefficients from the PCA model
+gamma <- coef(model_pca)[-1]  # Coefficients for PC1-5
+alpha <- coef(model_pca)[1]   # Intercept
+
+# Extract the means and standard deviations used in scaling
+x_means <- pca_result$center
+x_sds <- pca_result$scale
+
+# Compute coefficients for the original variables:
+beta_original <- as.vector((loadings %*% gamma) / x_sds)
+
+# Compute the new intercept
+new_intercept <- alpha - sum((x_means / x_sds) * (loadings %*% gamma))
+
+# Display the model in terms of original predictors
+cat("Expressed Regression Model:\n")
+cat("Crime =", round(new_intercept, 4), "\n")
+for (i in 1:length(beta_original)) {
+  cat(round(beta_original[i], 4), "*", names(X)[i], if(i < length(beta_original)) "+\n" else "\n")
+}
+
+```
+
+**Observations**:
+The re-expressed model yields an intercept of approximately -5933.837 and coefficients for each predictor. This model is mathematically equivalent to the PCA-based regression model and now offers direct interpretability in the original units.
+
+
+## Comparisson with Regression model I had previously worked on
+```{r}
+# Direct regression model using the unscaled predictors 
+model_direct <- lm(Crime ~ ., data = crime_data)
+summary(model_direct)
+```
+
+**Observations**:
+The direct regression model reports an adjusted R-squared of approximately 0.7078. Although both models perform comparably, the PCA-based approach reduces multicollinearity and simplifies the predictor space.
+
+
+## Comparisson of Predictions on training-data
+```{r}
+# Predictions from the PCA model (expressed in original terms are equivalent)
+pred_pca <- predict(model_pca, newdata = list(pc_scores = pc_scores))
+
+# Predictions from the direct model
+pred_direct <- predict(model_direct, newdata = crime_data)
+
+# Create a comparison data frame
+compare_df <- data.frame(
+  Actual = y,
+  Predicted_Direct = pred_direct,
+  Predicted_PCA = pred_pca
+)
+
+# Plot Actual vs Predicted for the direct model
+ggplot(compare_df, aes(x = Actual, y = Predicted_Direct)) +
+  geom_point(color = "blue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Direct Model: Actual vs Predicted Crime Rate",
+       x = "Actual Crime Rate", y = "Predicted Crime Rate")
+```
+
+**Observations**:
+The scatterplot shows that predicted crime rates from the direct model closely follow the 45 degrees line, indicating a good fit. The predictions from the PCA model are nearly identical, confirming the equivalence of the two approaches in terms of prediction.
+
+
+# Diagnostic Plots for the PCA Model
+```{r}
+par(mfrow = c(2, 2))
+plot(model_pca, which = 1:4)
+```
+
+
+**Observations**:
+The diagnostic plots suggest that the residuals are approximately normally distributed with no extreme outliers. There is minor heteroscedasticity at higher fitted values, but overall the model assumptions appear reasonably met.
+
+
+# Final Conclusion:
+In summary, the PCA based regression model re-expressed in terms of the original variables provides a robust alternative to the direct regression model from Question 8.2. Both approaches yield similar predictive accuracy and goodness of fit metrics; however, the PCA approach effectively reduces multicollinearity by transforming the predictors into orthogonal components. The diagnostic checks confirm that the model assumptions are adequately satisfied, making this a solid model for predicting crime rates.
+
